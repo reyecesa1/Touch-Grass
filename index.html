@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>touchgra$$ — earthy bloom field</title>
+    <title>touchgra$$ — autumn ember field • warm & popping</title>
     <style>
         * {
             margin: 0;
@@ -15,7 +15,7 @@
 
         body {
             min-height: 100vh;
-            background: #2d4a1e;  /* earthy background fallback */
+            background: #2a2a1c;  /* deep charcoal-warm fallback */
             overflow-x: hidden;
             font-family: 'Fira Mono', 'Courier New', 'SF Mono', monospace;
         }
@@ -38,13 +38,15 @@
 <script>
 (function(){
     // ============================================================
-    //  EARTHY DENSE BLOOM FIELD — "touchgra$$" repeated, no gaps
-    //  water ripple bloom + shuffled colors on each click
+    //  AUTUMN EMBER BLOOM FIELD — "touchgra$$" 
+    //  earthy, warm browns, terracotta, sage, raspberry, sunshine yellow
+    //  each touch = fresh shuffle of autumn/warm/berry colors
+    //  earthy green base that POPS, not washed
     // ============================================================
 
     // ----- CONFIGURATION -----------------------------------------
-    // Earthy, deep forest green (RGB)
-    const BGCOLOR = [45, 74, 30];      // rich moss / soil-green
+    // DEEP EARTHY BACKGROUND — charcoal meets forest floor
+    const BGCOLOR = [35, 38, 28];      // deep mossy charcoal (earthy depth)
     const BASE_WORD = "touchgra$$";
     const REPEAT_COUNT = 30;
     const TEXT_PHRASE = BASE_WORD.repeat(REPEAT_COUNT);
@@ -53,44 +55,73 @@
     const MAX_GROWTH = 1000;
     const MIN_GROWTH = 1;
     
-    // RIPPLE PHYSICS
+    // RIPPLE PHYSICS — warm, swelling ripple
     const RIPPLE_MAX_RADIUS = 430;
-    const RIPPLE_DURATION_MS = 680;
-    const RIPPLE_WIDTH = 62;
-    const RIPPLE_STRENGTH = 8200;
+    const RIPPLE_DURATION_MS = 720;
+    const RIPPLE_WIDTH = 68;
+    const RIPPLE_STRENGTH = 9200;       // strong bloom pop
     
-    // NATURAL DECAY
-    const DECAY_FACTOR = 0.972;
+    // NATURAL DECAY — keeps field alive but fresh
+    const DECAY_FACTOR = 0.975;
     
-    // GRID — tight packing
+    // GRID — dense letter packing
     const GRID_CELL_SIZE = 140;
     const LETTER_SPACING_FACTOR = 0.92;
     const LINE_HEIGHT_FACTOR = 0.88;
     
-    // ----- ORIGINAL COLOR PALETTE (shuffled on click) ----------
-    const ORIGINAL_PALETTE = {
-        't': [119, 239, 255],
-        'o': [255, 187, 194],
-        'u': [255, 170, 40],
-        'c': [242, 18, 0],
-        'h': [221, 255, 123],
-        'g': [255, 255, 220],
-        'r': [255, 229, 0],
-        'a': [138, 97, 255],
-        '$': [255, 110, 30],
-        's': [227, 192, 255],
+    // ========== 🍂 AUTUMN / WARM / BERRY COLOR PALETTE ==========
+    // earthy + poppy: warm browns, terracotta, olive green, sage, sandstone, muted rust
+    // sunshine yellow, coral pink, ocean blue, mint green, fiery red, cloud dancer (soft warm white)
+    // deep raspberry, berry pinks, charcoal grey
+    // all high enough saturation to POP against earthy green
+    const AUTUMN_PALETTE = {
+        't': [165, 85, 55],     // terracotta (warm earth)
+        'o': [210, 125, 70],    // sandstone / muted rust
+        'u': [140, 100, 65],    // warm brown (chestnut)
+        'c': [120, 100, 55],    // olive green (earthy pop)
+        'h': [160, 140, 85],    // sage green (soft but lively)
+        'g': [240, 210, 100],   // sunshine yellow (bold autumn sun)
+        'r': [255, 140, 150],   // coral pink (warm & sweet)
+        'a': [70, 160, 190],    // ocean blue (cool contrast, pops)
+        '$': [80, 170, 110],    // mint green (fresh)
+        's': [230, 75, 85]      // fiery red (strong autumn fire)
     };
+    
+    // additional berry & charcoal tones (will be shuffled into the mix)
+    const BERRY_CHARCOAL = {
+        'extra_raspberry': [175, 55, 95],   // deep raspberry
+        'extra_berrypink': [210, 85, 120],  // berry pink
+        'extra_charcoal': [80, 85, 90]      // warm charcoal grey
+    };
+    
+    // we will merge and randomly assign to the 10 chars each time
+    // so each touch gets fresh distribution of all these warm/autumn/berry tones
     
     // ----- GLOBAL STATE ------------------------------------------
     let letters = [];
     let gridCells = new Map();
-    let baseGreen;                  // earthy base grass
+    let baseGreen;                  // earthy base that pops
     let flowerColors = {};
     let fontMain = 'monospace';
     let cols, rows, cellW, cellH;
     let activeRipples = [];
     
-    // ----- SHUFFLE EXISTING COLORS ------------------------------
+    // ----- BUILD FULL COLOR POOL (warm autumn + berry + charcoal) --
+    function buildFullColorPool() {
+        // start with all autumn base colors
+        let pool = Object.values(AUTUMN_PALETTE);
+        // add berry and charcoal variations
+        pool.push(BERRY_CHARCOAL.extra_raspberry);
+        pool.push(BERRY_CHARCOAL.extra_berrypink);
+        pool.push(BERRY_CHARCOAL.extra_charcoal);
+        // also add cloud dancer (soft warm white/cream)
+        pool.push([245, 235, 210]);   // cloud dancer (warm off-white)
+        // add extra muted rust & sandstone depth
+        pool.push([190, 110, 70]);    // deeper rust
+        pool.push([100, 75, 55]);     // deep warm taupe
+        return pool;
+    }
+    
     function shuffleArray(arr) {
         for (let i = arr.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
@@ -100,17 +131,20 @@
     }
     
     function randomizeColorAssignments() {
-        const chars = Object.keys(ORIGINAL_PALETTE);
-        const colorValues = chars.map(ch => ORIGINAL_PALETTE[ch]);
-        const shuffledColors = shuffleArray([...colorValues]);
+        const chars = Object.keys(AUTUMN_PALETTE);  // ['t','o','u','c','h','g','r','a','$','s']
+        const colorPool = buildFullColorPool();
+        // shuffle the pool so each touch gets a fresh mix of warm/earthy/berry tones
+        const shuffledPool = shuffleArray([...colorPool]);
+        // assign to each character (10 chars) from the shuffled pool (ensures variety)
         for (let i = 0; i < chars.length; i++) {
             const ch = chars[i];
-            const rgb = shuffledColors[i];
+            const rgb = shuffledPool[i % shuffledPool.length];
             flowerColors[ch] = color(rgb[0], rgb[1], rgb[2]);
         }
+        // extra safety: ensure no two are identical? randomness is fine, creates organic pop
     }
     
-    // ----- SPATIAL GRID ------------------------------------------
+    // ----- SPATIAL GRID (performance) ----------------------------
     function rebuildSpatialGrid() {
         gridCells.clear();
         for (let i = 0; i < letters.length; i++) {
@@ -141,7 +175,7 @@
         return candidates;
     }
     
-    // ----- DENSE LETTER GRID -------------------------------------
+    // ----- DENSE LETTER GRID (full field, no gaps) ----------------
     function generateLetterGrid() {
         letters = [];
         textFont(fontMain);
@@ -180,16 +214,18 @@
         rebuildSpatialGrid();
     }
     
-    // ----- COLOR BLENDING (earthy grass → flower) ---------------
+    // ----- COLOR BLENDING: earthy green → autumn pop --------------
     function getBlendedColor(growth, char) {
         if (growth <= BLOOM_THRESHOLD) return baseGreen;
         let t = (growth - BLOOM_THRESHOLD) / (MAX_GROWTH - BLOOM_THRESHOLD);
         t = Math.min(1, Math.max(0, t));
-        const flower = flowerColors[char] || flowerColors['$'] || color(255, 200, 100);
+        // slight easing to make colors feel "popping"
+        t = Math.pow(t, 0.85);
+        const flower = flowerColors[char] || flowerColors['g'] || color(220, 180, 80);
         return lerpColor(baseGreen, flower, t);
     }
     
-    // ----- RIPPLE BOOST ------------------------------------------
+    // ----- RIPPLE BOOST (intense growth wave) --------------------
     function applyRippleBoost(ripple, nowMs) {
         const elapsed = (nowMs - ripple.startTime) / RIPPLE_DURATION_MS;
         if (elapsed >= 1.0) return false;
@@ -217,7 +253,7 @@
         return true;
     }
     
-    // ----- NATURAL DECAY -----------------------------------------
+    // ----- NATURAL DECAY (subtle fade, keeps field fresh) --------
     function decayAllLetters() {
         for (let i = 0; i < letters.length; i++) {
             let ng = letters[i].growth * DECAY_FACTOR;
@@ -226,18 +262,19 @@
         }
     }
     
-    // ----- ADD RIPPLE + SHUFFLE COLORS --------------------------
+    // ----- ADD RIPPLE + RESHUFFLE COLORS (fresh autumn mix each touch) --
     function addBloomRipple(x, y) {
+        // each interaction = new random assignment of warm/berry/earthy tones
         randomizeColorAssignments();
         activeRipples.push({
             x: x,
             y: y,
             startTime: millis()
         });
-        if (activeRipples.length > 20) activeRipples.shift();
+        if (activeRipples.length > 24) activeRipples.shift();
     }
     
-    // ----- UPDATE RIPPLES & DECAY -------------------------------
+    // ----- UPDATE RIPPLES & DECAY ---------------------------------
     function updateBlooms() {
         const now = millis();
         for (let i = activeRipples.length-1; i >= 0; i--) {
@@ -247,13 +284,13 @@
         decayAllLetters();
     }
     
-    // ----- DRAW DENSE FIELD -------------------------------------
+    // ----- DRAW THE DENSE FIELD (with scale & bloom pop) ---------
     function drawLetters() {
         textFont(fontMain);
         textAlign(CENTER, CENTER);
         for (let letter of letters) {
             const growth = letter.growth;
-            let scaleFactor = map(growth, MIN_GROWTH, MAX_GROWTH, 0.76, 1.42);
+            let scaleFactor = map(growth, MIN_GROWTH, MAX_GROWTH, 0.78, 1.48);
             const col = getBlendedColor(growth, letter.char);
             fill(col);
             noStroke();
@@ -266,7 +303,7 @@
         }
     }
     
-    // ----- RESIZE ------------------------------------------------
+    // ----- RESIZE HANDLER (maintain density) ---------------------
     function resizeMeadow() {
         resizeCanvas(windowWidth, windowHeight);
         background(BGCOLOR[0], BGCOLOR[1], BGCOLOR[2]);
@@ -284,8 +321,9 @@
         fontMain = 'monospace';
         textFont(fontMain);
         
-        // Earthy base green — deep, warm forest floor
-        baseGreen = color(55, 85, 40);   // muted olive/fern
+        // EARTHY GREEN BASE — vibrant olive with warmth (not washed, deep but lively)
+        // blends beautifully with terracotta, rust, raspberry, sunshine yellow
+        baseGreen = color(85, 115, 65);   // rich sage-meets-olive, earthy and popping
         
         randomizeColorAssignments();
         generateLetterGrid();
@@ -293,12 +331,13 @@
     }
     
     function draw() {
+        // deep earthy charcoal background (adds contrast to make colors pop)
         background(BGCOLOR[0], BGCOLOR[1], BGCOLOR[2]);
         updateBlooms();
         drawLetters();
     }
     
-    // ----- EVENT HANDLERS ----------------------------------------
+    // ----- EVENT HANDLERS (mouse + touch) ------------------------
     function mousePressed() {
         if (mouseX >= 0 && mouseX <= width && mouseY >= 0 && mouseY <= height) {
             addBloomRipple(mouseX, mouseY);
