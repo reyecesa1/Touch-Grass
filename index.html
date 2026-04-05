@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>touch gra$$ — water ripple bloom</title>
+    <title>touch gra$$ — shuffled color bloom</title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
             user-select: none;
-            touch-action: none; /* prevents pull-to-refresh & zoom while touching canvas */
+            touch-action: none;
         }
 
         body {
@@ -38,43 +38,77 @@
 <script>
 (function(){
     // ============================================================
-    //  WATER RIPPLE BLOOM
-    //  Click / Tap → an expanding ring of bloom travels outward
-    //  like a pebble dropped in water. Each letter blooms when the
-    //  ripple passes over it, then gently de‑blooms.
+    //  WATER RIPPLE BLOOM — shuffle existing colors on each click
     // ============================================================
 
     // ----- CONFIGURATION -----------------------------------------
-    const BGCOLOR = [23, 195, 50];               // deep grass green
+    const BGCOLOR = [23, 195, 50];
     const TEXT_PHRASE = "touch gra$$ ";
-    const BLOOM_THRESHOLD = 480;                 // growth value where grass turns to flower
-    const MAX_GROWTH = 1000;                    // peak bloom intensity
-    const MIN_GROWTH = 1;                       // dormant state
+    const BLOOM_THRESHOLD = 480;
+    const MAX_GROWTH = 1000;
+    const MIN_GROWTH = 1;
     
     // RIPPLE PHYSICS
-    const RIPPLE_MAX_RADIUS = 430;               // how far the ripple travels (pixels)
-    const RIPPLE_DURATION_MS = 680;              // total ripple life (milliseconds)
-    const RIPPLE_WIDTH = 62;                     // thickness of the expanding ring
-    const RIPPLE_STRENGTH = 8200;                // bloom power added to letters inside the ring
+    const RIPPLE_MAX_RADIUS = 430;
+    const RIPPLE_DURATION_MS = 680;
+    const RIPPLE_WIDTH = 62;
+    const RIPPLE_STRENGTH = 8200;
     
-    // NATURAL DECAY (de‑bloom) – after ripple passes, flowers fade
-    const DECAY_FACTOR = 0.972;                  // per frame (60fps → ~0.18 after 1 sec)
+    // NATURAL DECAY
+    const DECAY_FACTOR = 0.972;
     
-    // GRID & SPATIAL HASH (for fast radius lookups)
+    // GRID
     const GRID_CELL_SIZE = 140;
     
+    // ----- ORIGINAL FIXED COLOR PALETTE (no new colors) ----------
+    const ORIGINAL_PALETTE = {
+        't': [119, 239, 255],   // ice mint
+        'o': [255, 187, 194],   // soft rose
+        'u': [255, 170, 40],    // marigold
+        'c': [242, 18, 0],      // poppy red
+        'h': [221, 255, 123],   // lime spark
+        'g': [255, 255, 220],   // cream glow
+        'r': [255, 229, 0],     // dandelion
+        'a': [138, 97, 255],    // violet
+        '$': [255, 110, 30],    // amber
+        's': [227, 192, 255],   // lavender
+        ' ': [180, 230, 120]    // grassy highlight
+    };
+    
     // ----- GLOBAL STATE ------------------------------------------
-    let letters = [];               // each: { char, x, y, growth }
-    let gridCells = new Map();      // spatial index
-    let baseGreen;                  // p5.Color
-    let flowerColors = {};          // char → flower color
+    let letters = [];
+    let gridCells = new Map();
+    let baseGreen;
+    let flowerColors = {};       // will hold shuffled assignments
     let fontMain = 'monospace';
     let cols, rows, cellW, cellH;
-    
-    // active ripples (each ripple = expanding ring)
     let activeRipples = [];
     
-    // ----- HELPER: rebuild spatial grid (for efficient distance checks) ----
+    // ----- SHUFFLE EXISTING COLORS (Fisher-Yates) ----------------
+    function shuffleArray(arr) {
+        for (let i = arr.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+    }
+    
+    function randomizeColorAssignments() {
+        // Get the list of character keys
+        const chars = Object.keys(ORIGINAL_PALETTE);
+        // Extract the color values from the original palette
+        const colorValues = chars.map(ch => ORIGINAL_PALETTE[ch]);
+        // Shuffle the color values
+        const shuffledColors = shuffleArray([...colorValues]);
+        // Reassign shuffled colors to characters
+        for (let i = 0; i < chars.length; i++) {
+            const ch = chars[i];
+            const rgb = shuffledColors[i];
+            flowerColors[ch] = color(rgb[0], rgb[1], rgb[2]);
+        }
+    }
+    
+    // ----- SPATIAL GRID ------------------------------------------
     function rebuildSpatialGrid() {
         gridCells.clear();
         for (let i = 0; i < letters.length; i++) {
@@ -87,7 +121,6 @@
         }
     }
     
-    // get all letter indices that could be within a given radius (fast approximate)
     function getCandidateIndices(centerX, centerY, radius) {
         const minCellX = Math.floor((centerX - radius) / GRID_CELL_SIZE);
         const maxCellX = Math.floor((centerX + radius) / GRID_CELL_SIZE);
@@ -106,7 +139,7 @@
         return candidates;
     }
     
-    // ----- GENERATE THE LETTER GRID (lush meadow) -------------------------
+    // ----- GENERATE LETTER GRID -----------------------------------
     function generateLetterGrid() {
         letters = [];
         textFont(fontMain);
@@ -143,7 +176,7 @@
         rebuildSpatialGrid();
     }
     
-    // ----- COLOR: from grass to flower based on growth value -------------
+    // ----- COLOR BLENDING -----------------------------------------
     function getBlendedColor(growth, char) {
         if (growth <= BLOOM_THRESHOLD) return baseGreen;
         let t = (growth - BLOOM_THRESHOLD) / (MAX_GROWTH - BLOOM_THRESHOLD);
@@ -152,20 +185,13 @@
         return lerpColor(baseGreen, flower, t);
     }
     
-    // ----- APPLY ONE RIPPLE TO ALL AFFECTED LETTERS ----------------------
-    // This is called every frame for every active ripple.
-    // The ripple is an expanding ring: letters within a certain distance band
-    // receive a bloom boost that fades with time and distance from the ring center.
+    // ----- RIPPLE BOOST (expanding ring) --------------------------
     function applyRippleBoost(ripple, nowMs) {
         const elapsed = (nowMs - ripple.startTime) / RIPPLE_DURATION_MS;
-        if (elapsed >= 1.0) return false; // ripple expired
+        if (elapsed >= 1.0) return false;
         
-        // current radius of the ring (expands linearly)
         const currentRadius = RIPPLE_MAX_RADIUS * elapsed;
-        // intensity fades as ripple ages: strong at start, weak near end
-        const timeFactor = 1.0 - elapsed;  // 1 → 0
-        
-        // get only letters that are potentially inside the ripple's max radius + width
+        const timeFactor = 1.0 - elapsed;
         const maxCheckRadius = RIPPLE_MAX_RADIUS + RIPPLE_WIDTH;
         const candidates = getCandidateIndices(ripple.x, ripple.y, maxCheckRadius);
         
@@ -174,26 +200,20 @@
             const dx = l.x - ripple.x;
             const dy = l.y - ripple.y;
             const dist = Math.hypot(dx, dy);
-            
-            // check if letter is within the ring band
             const distToRing = Math.abs(dist - currentRadius);
             if (distToRing < RIPPLE_WIDTH) {
-                // ring intensity: highest at exact ring center, fades to edges
                 const ringFactor = 1.0 - (distToRing / RIPPLE_WIDTH);
-                // distance falloff: even inside ring, letters closer to the ripple center get slightly more?
-                // we keep pure ring shape: only distance to ring matters.
                 let intensity = RIPPLE_STRENGTH * ringFactor * timeFactor;
-                // ensure a minimum splash even at far edges
                 if (intensity > 0) {
                     let newGrowth = Math.min(l.growth + intensity, MAX_GROWTH);
                     l.growth = newGrowth;
                 }
             }
         }
-        return true; // ripple still active
+        return true;
     }
     
-    // ----- NATURAL DECAY: all letters slowly lose bloom (de‑bloom) --------
+    // ----- NATURAL DECAY (de‑bloom) -------------------------------
     function decayAllLetters() {
         for (let i = 0; i < letters.length; i++) {
             let ng = letters[i].growth * DECAY_FACTOR;
@@ -202,38 +222,35 @@
         }
     }
     
-    // ----- ADD A NEW RIPPLE (called on click / tap) -----------------------
+    // ----- ADD NEW RIPPLE + SHUFFLE COLORS ------------------------
     function addBloomRipple(x, y) {
+        // shuffle the existing color palette on every click
+        randomizeColorAssignments();
+        
         activeRipples.push({
             x: x,
             y: y,
             startTime: millis()
         });
-        // limit max ripples to avoid performance clutter (20 is plenty)
         if (activeRipples.length > 20) activeRipples.shift();
     }
     
-    // ----- UPDATE ALL RIPPLES & DECAY ------------------------------------
+    // ----- UPDATE ALL RIPPLES & DECAY ----------------------------
     function updateBlooms() {
         const now = millis();
-        // apply each active ripple's ring boost
         for (let i = activeRipples.length-1; i >= 0; i--) {
             const stillActive = applyRippleBoost(activeRipples[i], now);
-            if (!stillActive) {
-                activeRipples.splice(i,1);
-            }
+            if (!stillActive) activeRipples.splice(i,1);
         }
-        // after all ripples have added bloom, apply natural decay (fade out)
         decayAllLetters();
     }
     
-    // ----- DRAW EVERYTHING (scaled letters with flower colors) -----------
+    // ----- DRAW LETTERS WITH CURRENT COLORS -----------------------
     function drawLetters() {
         textFont(fontMain);
         textAlign(CENTER, CENTER);
         for (let letter of letters) {
             const growth = letter.growth;
-            // subtle scale: blooms swell a bit, dormant letters shrink slightly
             let scaleFactor = map(growth, MIN_GROWTH, MAX_GROWTH, 0.76, 1.42);
             const col = getBlendedColor(growth, letter.char);
             fill(col);
@@ -247,16 +264,15 @@
         }
     }
     
-    // ----- RESIZE HANDLER: rebuild grid on window resize -----------------
+    // ----- RESIZE ------------------------------------------------
     function resizeMeadow() {
         resizeCanvas(windowWidth, windowHeight);
         background(BGCOLOR[0], BGCOLOR[1], BGCOLOR[2]);
         generateLetterGrid();
-        // clear ripples on resize (optional, avoids weird offsets)
         activeRipples = [];
     }
     
-    // ========== P5.JS CORE ==============================================
+    // ========== P5.JS SETUP ======================================
     function setup() {
         const canvas = createCanvas(windowWidth, windowHeight);
         canvas.style('position', 'fixed').style('top', '0').style('left', '0').style('z-index', '1');
@@ -268,20 +284,8 @@
         
         baseGreen = color(41, 157, 0);
         
-        // vibrant flower palette per character
-        flowerColors = {
-            't': color(119, 239, 255),
-            'o': color(255, 187, 194),
-            'u': color(255, 170, 40),
-            'c': color(242, 18, 0),
-            'h': color(221, 255, 123),
-            'g': color(255, 255, 220),
-            'r': color(255, 229, 0),
-            'a': color(138, 97, 255),
-            '$': color(255, 110, 30),
-            's': color(227, 192, 255),
-            ' ': color(180, 230, 120)
-        };
+        // initial shuffle of the original palette
+        randomizeColorAssignments();
         
         generateLetterGrid();
         frameRate(60);
@@ -289,16 +293,16 @@
     
     function draw() {
         background(BGCOLOR[0], BGCOLOR[1], BGCOLOR[2]);
-        updateBlooms();    // ripples add growth + natural decay
-        drawLetters();     // render meadow
+        updateBlooms();
+        drawLetters();
     }
     
-    // ----- EVENT HANDLERS (click / tap create water ripples) -------------
+    // ----- EVENT HANDLERS -----------------------------------------
     function mousePressed() {
         if (mouseX >= 0 && mouseX <= width && mouseY >= 0 && mouseY <= height) {
             addBloomRipple(mouseX, mouseY);
         }
-        return false; // prevent default
+        return false;
     }
     
     function touchStarted() {
@@ -307,21 +311,19 @@
                 addBloomRipple(t.x, t.y);
             }
         }
-        return false; // prevent scrolling / zoom
+        return false;
     }
     
     function windowResized() {
         resizeMeadow();
     }
     
-    // Attach all p5 global callbacks (works inside IIFE)
     window.setup = setup;
     window.draw = draw;
     window.windowResized = windowResized;
     window.mousePressed = mousePressed;
     window.touchStarted = touchStarted;
     
-    // disable right-click context menu on canvas
     document.addEventListener('contextmenu', (e) => {
         if (e.target.tagName === 'CANVAS') e.preventDefault();
     });
