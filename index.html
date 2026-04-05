@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>touchgra$$ — dense bloom field</title>
+    <title>touchgra$$ — earthy bloom field</title>
     <style>
         * {
             margin: 0;
@@ -15,7 +15,7 @@
 
         body {
             min-height: 100vh;
-            background: #17632c;
+            background: #2d4a1e;  /* earthy background fallback */
             overflow-x: hidden;
             font-family: 'Fira Mono', 'Courier New', 'SF Mono', monospace;
         }
@@ -38,17 +38,15 @@
 <script>
 (function(){
     // ============================================================
-    //  DENSE BLOOM FIELD — "touchgra$$" repeated, no spaces
+    //  EARTHY DENSE BLOOM FIELD — "touchgra$$" repeated, no gaps
     //  water ripple bloom + shuffled colors on each click
     // ============================================================
 
     // ----- CONFIGURATION -----------------------------------------
-    const BGCOLOR = [23, 195, 50];
-    // NO SPACES — continuous string
+    // Earthy, deep forest green (RGB)
+    const BGCOLOR = [45, 74, 30];      // rich moss / soil-green
     const BASE_WORD = "touchgra$$";
-    // We'll repeat it to create a very long phrase for the grid
-    // so that the pattern feels endless and organic
-    const REPEAT_COUNT = 30;   // creates "touchgra$$touchgra$$..." x30 = long string
+    const REPEAT_COUNT = 30;
     const TEXT_PHRASE = BASE_WORD.repeat(REPEAT_COUNT);
     
     const BLOOM_THRESHOLD = 480;
@@ -64,11 +62,10 @@
     // NATURAL DECAY
     const DECAY_FACTOR = 0.972;
     
-    // GRID — tighter packing to remove visual gaps
+    // GRID — tight packing
     const GRID_CELL_SIZE = 140;
-    // letter spacing multiplier (smaller = denser)
-    const LETTER_SPACING_FACTOR = 0.92;   // makes letters closer horizontally
-    const LINE_HEIGHT_FACTOR = 0.88;      // reduces vertical gaps
+    const LETTER_SPACING_FACTOR = 0.92;
+    const LINE_HEIGHT_FACTOR = 0.88;
     
     // ----- ORIGINAL COLOR PALETTE (shuffled on click) ----------
     const ORIGINAL_PALETTE = {
@@ -82,13 +79,12 @@
         'a': [138, 97, 255],
         '$': [255, 110, 30],
         's': [227, 192, 255],
-        // we still include a fallback for any unexpected char, but now no spaces
     };
     
     // ----- GLOBAL STATE ------------------------------------------
     let letters = [];
     let gridCells = new Map();
-    let baseGreen;
+    let baseGreen;                  // earthy base grass
     let flowerColors = {};
     let fontMain = 'monospace';
     let cols, rows, cellW, cellH;
@@ -114,7 +110,7 @@
         }
     }
     
-    // ----- SPATIAL GRID (fast radius queries) --------------------
+    // ----- SPATIAL GRID ------------------------------------------
     function rebuildSpatialGrid() {
         gridCells.clear();
         for (let i = 0; i < letters.length; i++) {
@@ -145,29 +141,24 @@
         return candidates;
     }
     
-    // ----- DENSE LETTER GRID (no gaps, overwhelming amount) ------
+    // ----- DENSE LETTER GRID -------------------------------------
     function generateLetterGrid() {
         letters = [];
         textFont(fontMain);
         textSize(32);
         
-        // measure a reference character to compute tighter spacing
         const sampleW = textWidth("W") * LETTER_SPACING_FACTOR;
         const sampleH = (textAscent() + textDescent()) * LINE_HEIGHT_FACTOR;
         
-        // calculate how many columns and rows can fit with dense packing
         cols = Math.floor(width / sampleW);
         rows = Math.floor(height / sampleH);
-        // ensure at least a dense field (minimum 20 columns for that "overwhelming" look)
         if (cols < 24) cols = 24;
         if (rows < 18) rows = 18;
         
         cellW = width / cols;
         cellH = height / rows;
         
-        // create a very long repeating pattern from TEXT_PHRASE (which is "touchgra$$" repeated 30x)
         let fullPattern = TEXT_PHRASE;
-        // make it even longer if needed to cover all cells without repeating too obviously
         while (fullPattern.length < cols * rows) {
             fullPattern += BASE_WORD;
         }
@@ -177,7 +168,6 @@
             for (let col = 0; col < cols; col++) {
                 const ch = fullPattern[idx % fullPattern.length];
                 idx++;
-                // center each letter in its cell
                 const x = col * cellW + cellW * 0.5;
                 const y = row * cellH + cellH * 0.5;
                 letters.push({
@@ -190,17 +180,16 @@
         rebuildSpatialGrid();
     }
     
-    // ----- COLOR BLENDING (grass → flower) -----------------------
+    // ----- COLOR BLENDING (earthy grass → flower) ---------------
     function getBlendedColor(growth, char) {
         if (growth <= BLOOM_THRESHOLD) return baseGreen;
         let t = (growth - BLOOM_THRESHOLD) / (MAX_GROWTH - BLOOM_THRESHOLD);
         t = Math.min(1, Math.max(0, t));
-        // fallback to a default bright color if character missing (should not happen)
         const flower = flowerColors[char] || flowerColors['$'] || color(255, 200, 100);
         return lerpColor(baseGreen, flower, t);
     }
     
-    // ----- RIPPLE BOOST (expanding ring) -------------------------
+    // ----- RIPPLE BOOST ------------------------------------------
     function applyRippleBoost(ripple, nowMs) {
         const elapsed = (nowMs - ripple.startTime) / RIPPLE_DURATION_MS;
         if (elapsed >= 1.0) return false;
@@ -228,7 +217,7 @@
         return true;
     }
     
-    // ----- NATURAL DECAY (de‑bloom) ------------------------------
+    // ----- NATURAL DECAY -----------------------------------------
     function decayAllLetters() {
         for (let i = 0; i < letters.length; i++) {
             let ng = letters[i].growth * DECAY_FACTOR;
@@ -237,9 +226,9 @@
         }
     }
     
-    // ----- ADD NEW RIPPLE + SHUFFLE COLORS -----------------------
+    // ----- ADD RIPPLE + SHUFFLE COLORS --------------------------
     function addBloomRipple(x, y) {
-        randomizeColorAssignments();  // shuffle existing colors
+        randomizeColorAssignments();
         activeRipples.push({
             x: x,
             y: y,
@@ -248,7 +237,7 @@
         if (activeRipples.length > 20) activeRipples.shift();
     }
     
-    // ----- UPDATE ALL RIPPLES & DECAY ---------------------------
+    // ----- UPDATE RIPPLES & DECAY -------------------------------
     function updateBlooms() {
         const now = millis();
         for (let i = activeRipples.length-1; i >= 0; i--) {
@@ -258,7 +247,7 @@
         decayAllLetters();
     }
     
-    // ----- DRAW THE DENSE FIELD ----------------------------------
+    // ----- DRAW DENSE FIELD -------------------------------------
     function drawLetters() {
         textFont(fontMain);
         textAlign(CENTER, CENTER);
@@ -277,7 +266,7 @@
         }
     }
     
-    // ----- RESIZE HANDLER ----------------------------------------
+    // ----- RESIZE ------------------------------------------------
     function resizeMeadow() {
         resizeCanvas(windowWidth, windowHeight);
         background(BGCOLOR[0], BGCOLOR[1], BGCOLOR[2]);
@@ -295,11 +284,10 @@
         fontMain = 'monospace';
         textFont(fontMain);
         
-        baseGreen = color(41, 157, 0);
+        // Earthy base green — deep, warm forest floor
+        baseGreen = color(55, 85, 40);   // muted olive/fern
         
-        // initial shuffle of original colors
         randomizeColorAssignments();
-        
         generateLetterGrid();
         frameRate(60);
     }
