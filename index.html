@@ -3,13 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>touch gra$$ — click to bloom</title>
+    <title>touch gra$$ — water ripple bloom</title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
             user-select: none;
+            touch-action: none; /* prevents pull-to-refresh & zoom while touching canvas */
         }
 
         body {
@@ -17,7 +18,6 @@
             background: #17632c;
             overflow-x: hidden;
             font-family: 'Fira Mono', 'Courier New', 'SF Mono', monospace;
-            font-weight: 400;
         }
 
         canvas {
@@ -29,248 +29,303 @@
             display: block;
             z-index: 1;
             pointer-events: auto;
+            touch-action: none;
         }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
 </head>
 <body>
-    <script>
-        (function(){
-            // ============ CLICK‑ONLY BLOOM MEADOW ============
-            // bloom only while mouse/touch is held down → de‑bloom immediately on release
-            
-            const BGCOLOR = [23, 195, 50];
-            const TEXT_PHRASE = "touch gra$$ ";
-            const BLOOM_THRESHOLD = 480;
-            const INFLUENCE_RADIUS = 400;
-            const GRID_CELL_SIZE = 150;
-            const DECAY_FACTOR = 0.96;
-            const MAX_GROWTH = 1000;
-            const MIN_GROWTH = 1;
-            
-            let letters = [];
-            let gridCells = new Map();
-            let baseGreen;
-            let flowerColors = {};
-            let fontMain;
-            let cols, rows, cellW, cellH;
-            
-            function rebuildSpatialGrid() {
-                gridCells.clear();
-                for (let i = 0; i < letters.length; i++) {
-                    const l = letters[i];
-                    const cellX = Math.floor(l.x / GRID_CELL_SIZE);
-                    const cellY = Math.floor(l.y / GRID_CELL_SIZE);
-                    const key = `${cellX}:${cellY}`;
-                    if (!gridCells.has(key)) gridCells.set(key, []);
-                    gridCells.get(key).push(i);
+<script>
+(function(){
+    // ============================================================
+    //  WATER RIPPLE BLOOM
+    //  Click / Tap → an expanding ring of bloom travels outward
+    //  like a pebble dropped in water. Each letter blooms when the
+    //  ripple passes over it, then gently de‑blooms.
+    // ============================================================
+
+    // ----- CONFIGURATION -----------------------------------------
+    const BGCOLOR = [23, 195, 50];               // deep grass green
+    const TEXT_PHRASE = "touch gra$$ ";
+    const BLOOM_THRESHOLD = 480;                 // growth value where grass turns to flower
+    const MAX_GROWTH = 1000;                    // peak bloom intensity
+    const MIN_GROWTH = 1;                       // dormant state
+    
+    // RIPPLE PHYSICS
+    const RIPPLE_MAX_RADIUS = 430;               // how far the ripple travels (pixels)
+    const RIPPLE_DURATION_MS = 680;              // total ripple life (milliseconds)
+    const RIPPLE_WIDTH = 62;                     // thickness of the expanding ring
+    const RIPPLE_STRENGTH = 8200;                // bloom power added to letters inside the ring
+    
+    // NATURAL DECAY (de‑bloom) – after ripple passes, flowers fade
+    const DECAY_FACTOR = 0.972;                  // per frame (60fps → ~0.18 after 1 sec)
+    
+    // GRID & SPATIAL HASH (for fast radius lookups)
+    const GRID_CELL_SIZE = 140;
+    
+    // ----- GLOBAL STATE ------------------------------------------
+    let letters = [];               // each: { char, x, y, growth }
+    let gridCells = new Map();      // spatial index
+    let baseGreen;                  // p5.Color
+    let flowerColors = {};          // char → flower color
+    let fontMain = 'monospace';
+    let cols, rows, cellW, cellH;
+    
+    // active ripples (each ripple = expanding ring)
+    let activeRipples = [];
+    
+    // ----- HELPER: rebuild spatial grid (for efficient distance checks) ----
+    function rebuildSpatialGrid() {
+        gridCells.clear();
+        for (let i = 0; i < letters.length; i++) {
+            const l = letters[i];
+            const cellX = Math.floor(l.x / GRID_CELL_SIZE);
+            const cellY = Math.floor(l.y / GRID_CELL_SIZE);
+            const key = `${cellX}:${cellY}`;
+            if (!gridCells.has(key)) gridCells.set(key, []);
+            gridCells.get(key).push(i);
+        }
+    }
+    
+    // get all letter indices that could be within a given radius (fast approximate)
+    function getCandidateIndices(centerX, centerY, radius) {
+        const minCellX = Math.floor((centerX - radius) / GRID_CELL_SIZE);
+        const maxCellX = Math.floor((centerX + radius) / GRID_CELL_SIZE);
+        const minCellY = Math.floor((centerY - radius) / GRID_CELL_SIZE);
+        const maxCellY = Math.floor((centerY + radius) / GRID_CELL_SIZE);
+        const candidates = new Set();
+        for (let cx = minCellX; cx <= maxCellX; cx++) {
+            for (let cy = minCellY; cy <= maxCellY; cy++) {
+                const key = `${cx}:${cy}`;
+                const indices = gridCells.get(key);
+                if (indices) {
+                    for (let idx of indices) candidates.add(idx);
                 }
             }
-            
-            function generateLetterGrid() {
-                letters = [];
-                textFont(fontMain);
-                textSize(32);
-                const sampleW = textWidth("W");
-                const sampleH = textAscent() + textDescent();
-                
-                const targetLetterWidth = sampleW * 1.2;
-                const targetLetterHeight = sampleH * 1.3;
-                
-                cols = Math.floor(width / targetLetterWidth);
-                rows = Math.floor(height / targetLetterHeight);
-                if (cols < 8) cols = 8;
-                if (rows < 5) rows = 5;
-                
-                cellW = width / cols;
-                cellH = height / rows;
-                
-                let phraseLen = TEXT_PHRASE.length;
-                let idx = 0;
-                for (let row = 0; row < rows; row++) {
-                    for (let col = 0; col < cols; col++) {
-                        const ch = TEXT_PHRASE[idx % phraseLen];
-                        idx++;
-                        const x = col * cellW + cellW * 0.5;
-                        const y = row * cellH + cellH * 0.5;
-                        letters.push({
-                            char: ch === ' ' ? ' ' : ch,
-                            x: x, y: y,
-                            growth: MIN_GROWTH
-                        });
-                    }
-                }
-                rebuildSpatialGrid();
+        }
+        return candidates;
+    }
+    
+    // ----- GENERATE THE LETTER GRID (lush meadow) -------------------------
+    function generateLetterGrid() {
+        letters = [];
+        textFont(fontMain);
+        textSize(32);
+        const sampleW = textWidth("W");
+        const sampleH = textAscent() + textDescent();
+        
+        const targetLetterWidth = sampleW * 1.2;
+        const targetLetterHeight = sampleH * 1.3;
+        
+        cols = Math.floor(width / targetLetterWidth);
+        rows = Math.floor(height / targetLetterHeight);
+        if (cols < 8) cols = 8;
+        if (rows < 5) rows = 5;
+        
+        cellW = width / cols;
+        cellH = height / rows;
+        
+        let phraseLen = TEXT_PHRASE.length;
+        let idx = 0;
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < cols; col++) {
+                const ch = TEXT_PHRASE[idx % phraseLen];
+                idx++;
+                const x = col * cellW + cellW * 0.5;
+                const y = row * cellH + cellH * 0.5;
+                letters.push({
+                    char: ch === ' ' ? ' ' : ch,
+                    x: x, y: y,
+                    growth: MIN_GROWTH
+                });
             }
+        }
+        rebuildSpatialGrid();
+    }
+    
+    // ----- COLOR: from grass to flower based on growth value -------------
+    function getBlendedColor(growth, char) {
+        if (growth <= BLOOM_THRESHOLD) return baseGreen;
+        let t = (growth - BLOOM_THRESHOLD) / (MAX_GROWTH - BLOOM_THRESHOLD);
+        t = Math.min(1, Math.max(0, t));
+        const flower = flowerColors[char] || flowerColors['$'] || color(255, 200, 100);
+        return lerpColor(baseGreen, flower, t);
+    }
+    
+    // ----- APPLY ONE RIPPLE TO ALL AFFECTED LETTERS ----------------------
+    // This is called every frame for every active ripple.
+    // The ripple is an expanding ring: letters within a certain distance band
+    // receive a bloom boost that fades with time and distance from the ring center.
+    function applyRippleBoost(ripple, nowMs) {
+        const elapsed = (nowMs - ripple.startTime) / RIPPLE_DURATION_MS;
+        if (elapsed >= 1.0) return false; // ripple expired
+        
+        // current radius of the ring (expands linearly)
+        const currentRadius = RIPPLE_MAX_RADIUS * elapsed;
+        // intensity fades as ripple ages: strong at start, weak near end
+        const timeFactor = 1.0 - elapsed;  // 1 → 0
+        
+        // get only letters that are potentially inside the ripple's max radius + width
+        const maxCheckRadius = RIPPLE_MAX_RADIUS + RIPPLE_WIDTH;
+        const candidates = getCandidateIndices(ripple.x, ripple.y, maxCheckRadius);
+        
+        for (let idx of candidates) {
+            const l = letters[idx];
+            const dx = l.x - ripple.x;
+            const dy = l.y - ripple.y;
+            const dist = Math.hypot(dx, dy);
             
-            function getBlendedColor(growth, char) {
-                if (growth <= BLOOM_THRESHOLD) return baseGreen;
-                let t = (growth - BLOOM_THRESHOLD) / (MAX_GROWTH - BLOOM_THRESHOLD);
-                t = Math.min(1, Math.max(0, t));
-                const flower = flowerColors[char] || flowerColors['$'] || color(255, 200, 100);
-                return lerpColor(baseGreen, flower, t);
-            }
-            
-            // update a letter near active pointers (click/touch hold)
-            function updateLetterWithClick(letter, pointers) {
-                let newGrowth = letter.growth * DECAY_FACTOR;
-                let maxBoost = 0;
-                
-                for (let p of pointers) {
-                    const dx = p.x - letter.x;
-                    const dy = p.y - letter.y;
-                    const distSq = dx*dx + dy*dy;
-                    if (distSq < INFLUENCE_RADIUS * INFLUENCE_RADIUS) {
-                        const dist = Math.sqrt(distSq);
-                        let intensity = 5200 / (dist + 5);
-                        if (intensity > maxBoost) maxBoost = intensity;
-                    }
-                }
-                
-                if (maxBoost > 0) {
-                    newGrowth = Math.min(newGrowth + maxBoost, MAX_GROWTH);
-                }
-                newGrowth = Math.max(newGrowth, MIN_GROWTH);
-                letter.growth = newGrowth;
-            }
-            
-            function updateLetterFar(letter) {
-                let newGrowth = letter.growth * DECAY_FACTOR;
-                if (newGrowth < MIN_GROWTH) newGrowth = MIN_GROWTH;
-                letter.growth = newGrowth;
-            }
-            
-            function getAffectedIndices(pointers) {
-                if (pointers.length === 0) return null;
-                const affectedSet = new Set();
-                const radiusCells = Math.ceil(INFLUENCE_RADIUS / GRID_CELL_SIZE) + 1;
-                
-                for (let p of pointers) {
-                    const centerCellX = Math.floor(p.x / GRID_CELL_SIZE);
-                    const centerCellY = Math.floor(p.y / GRID_CELL_SIZE);
-                    for (let dx = -radiusCells; dx <= radiusCells; dx++) {
-                        for (let dy = -radiusCells; dy <= radiusCells; dy++) {
-                            const key = `${centerCellX + dx}:${centerCellY + dy}`;
-                            const indices = gridCells.get(key);
-                            if (indices) {
-                                for (let idx of indices) affectedSet.add(idx);
-                            }
-                        }
-                    }
-                }
-                return affectedSet;
-            }
-            
-            function updateAllGrowths() {
-                // active pointers ONLY when mouse/touch is held down (no hover)
-                const pointers = [];
-                
-                // mouse: only if button is pressed
-                if (mouseIsPressed && mouseX >= 0 && mouseX <= width && mouseY >= 0 && mouseY <= height) {
-                    pointers.push({ x: mouseX, y: mouseY });
-                }
-                // touches: automatically only present while touching
-                if (touches.length > 0) {
-                    for (let t of touches) {
-                        pointers.push({ x: t.x, y: t.y });
-                    }
-                }
-                
-                if (pointers.length === 0) {
-                    // no active click/touch → decay all letters
-                    for (let i = 0; i < letters.length; i++) {
-                        let ng = letters[i].growth * DECAY_FACTOR;
-                        if (ng < MIN_GROWTH) ng = MIN_GROWTH;
-                        letters[i].growth = ng;
-                    }
-                    return;
-                }
-                
-                const nearIndices = getAffectedIndices(pointers);
-                if (nearIndices && nearIndices.size > 0) {
-                    for (let idx of nearIndices) {
-                        updateLetterWithClick(letters[idx], pointers);
-                    }
-                    for (let i = 0; i < letters.length; i++) {
-                        if (!nearIndices.has(i)) {
-                            updateLetterFar(letters[i]);
-                        }
-                    }
-                } else {
-                    for (let i = 0; i < letters.length; i++) {
-                        updateLetterWithClick(letters[i], pointers);
-                    }
+            // check if letter is within the ring band
+            const distToRing = Math.abs(dist - currentRadius);
+            if (distToRing < RIPPLE_WIDTH) {
+                // ring intensity: highest at exact ring center, fades to edges
+                const ringFactor = 1.0 - (distToRing / RIPPLE_WIDTH);
+                // distance falloff: even inside ring, letters closer to the ripple center get slightly more?
+                // we keep pure ring shape: only distance to ring matters.
+                let intensity = RIPPLE_STRENGTH * ringFactor * timeFactor;
+                // ensure a minimum splash even at far edges
+                if (intensity > 0) {
+                    let newGrowth = Math.min(l.growth + intensity, MAX_GROWTH);
+                    l.growth = newGrowth;
                 }
             }
-            
-            function drawLetters() {
-                textFont(fontMain);
-                textAlign(CENTER, CENTER);
-                
-                for (let letter of letters) {
-                    const growth = letter.growth;
-                    let scaleFactor = map(growth, MIN_GROWTH, MAX_GROWTH, 0.75, 1.35);
-                    const col = getBlendedColor(growth, letter.char);
-                    fill(col);
-                    noStroke();
-                    
-                    push();
-                    translate(letter.x, letter.y);
-                    scale(scaleFactor);
-                    textSize(32);
-                    text(letter.char, 0, 0);
-                    pop();
-                }
+        }
+        return true; // ripple still active
+    }
+    
+    // ----- NATURAL DECAY: all letters slowly lose bloom (de‑bloom) --------
+    function decayAllLetters() {
+        for (let i = 0; i < letters.length; i++) {
+            let ng = letters[i].growth * DECAY_FACTOR;
+            if (ng < MIN_GROWTH) ng = MIN_GROWTH;
+            letters[i].growth = ng;
+        }
+    }
+    
+    // ----- ADD A NEW RIPPLE (called on click / tap) -----------------------
+    function addBloomRipple(x, y) {
+        activeRipples.push({
+            x: x,
+            y: y,
+            startTime: millis()
+        });
+        // limit max ripples to avoid performance clutter (20 is plenty)
+        if (activeRipples.length > 20) activeRipples.shift();
+    }
+    
+    // ----- UPDATE ALL RIPPLES & DECAY ------------------------------------
+    function updateBlooms() {
+        const now = millis();
+        // apply each active ripple's ring boost
+        for (let i = activeRipples.length-1; i >= 0; i--) {
+            const stillActive = applyRippleBoost(activeRipples[i], now);
+            if (!stillActive) {
+                activeRipples.splice(i,1);
             }
-            
-            function resizeMeadow() {
-                resizeCanvas(windowWidth, windowHeight);
-                background(BGCOLOR[0], BGCOLOR[1], BGCOLOR[2]);
-                generateLetterGrid();
+        }
+        // after all ripples have added bloom, apply natural decay (fade out)
+        decayAllLetters();
+    }
+    
+    // ----- DRAW EVERYTHING (scaled letters with flower colors) -----------
+    function drawLetters() {
+        textFont(fontMain);
+        textAlign(CENTER, CENTER);
+        for (let letter of letters) {
+            const growth = letter.growth;
+            // subtle scale: blooms swell a bit, dormant letters shrink slightly
+            let scaleFactor = map(growth, MIN_GROWTH, MAX_GROWTH, 0.76, 1.42);
+            const col = getBlendedColor(growth, letter.char);
+            fill(col);
+            noStroke();
+            push();
+            translate(letter.x, letter.y);
+            scale(scaleFactor);
+            textSize(32);
+            text(letter.char, 0, 0);
+            pop();
+        }
+    }
+    
+    // ----- RESIZE HANDLER: rebuild grid on window resize -----------------
+    function resizeMeadow() {
+        resizeCanvas(windowWidth, windowHeight);
+        background(BGCOLOR[0], BGCOLOR[1], BGCOLOR[2]);
+        generateLetterGrid();
+        // clear ripples on resize (optional, avoids weird offsets)
+        activeRipples = [];
+    }
+    
+    // ========== P5.JS CORE ==============================================
+    function setup() {
+        const canvas = createCanvas(windowWidth, windowHeight);
+        canvas.style('position', 'fixed').style('top', '0').style('left', '0').style('z-index', '1');
+        canvas.style('touch-action', 'none');
+        pixelDensity(1);
+        
+        fontMain = 'monospace';
+        textFont(fontMain);
+        
+        baseGreen = color(41, 157, 0);
+        
+        // vibrant flower palette per character
+        flowerColors = {
+            't': color(119, 239, 255),
+            'o': color(255, 187, 194),
+            'u': color(255, 170, 40),
+            'c': color(242, 18, 0),
+            'h': color(221, 255, 123),
+            'g': color(255, 255, 220),
+            'r': color(255, 229, 0),
+            'a': color(138, 97, 255),
+            '$': color(255, 110, 30),
+            's': color(227, 192, 255),
+            ' ': color(180, 230, 120)
+        };
+        
+        generateLetterGrid();
+        frameRate(60);
+    }
+    
+    function draw() {
+        background(BGCOLOR[0], BGCOLOR[1], BGCOLOR[2]);
+        updateBlooms();    // ripples add growth + natural decay
+        drawLetters();     // render meadow
+    }
+    
+    // ----- EVENT HANDLERS (click / tap create water ripples) -------------
+    function mousePressed() {
+        if (mouseX >= 0 && mouseX <= width && mouseY >= 0 && mouseY <= height) {
+            addBloomRipple(mouseX, mouseY);
+        }
+        return false; // prevent default
+    }
+    
+    function touchStarted() {
+        for (let t of touches) {
+            if (t.x >= 0 && t.x <= width && t.y >= 0 && t.y <= height) {
+                addBloomRipple(t.x, t.y);
             }
-            
-            // ========== p5.js core ==========
-            function setup() {
-                const canvas = createCanvas(windowWidth, windowHeight);
-                canvas.style('position', 'fixed').style('top', '0').style('left', '0').style('z-index', '1');
-                pixelDensity(1);
-                
-                fontMain = 'monospace';
-                textFont(fontMain);
-                
-                baseGreen = color(41, 157, 0);
-                flowerColors = {
-                    't': color(119, 239, 255),
-                    'o': color(255, 187, 194),
-                    'u': color(255, 170, 40),
-                    'c': color(242, 18, 0),
-                    'h': color(221, 255, 123),
-                    'g': color(255, 255, 220),
-                    'r': color(255, 229, 0),
-                    'a': color(138, 97, 255),
-                    '$': color(255, 110, 30),
-                    's': color(227, 192, 255),
-                    ' ': color(180, 230, 120)
-                };
-                
-                generateLetterGrid();
-                frameRate(60);
-            }
-            
-            function draw() {
-                background(BGCOLOR[0], BGCOLOR[1], BGCOLOR[2]);
-                updateAllGrowths();
-                drawLetters();
-            }
-            
-            function windowResized() {
-                resizeMeadow();
-            }
-            
-            window.setup = setup;
-            window.draw = draw;
-            window.windowResized = windowResized;
-        })();
-    </script>
+        }
+        return false; // prevent scrolling / zoom
+    }
+    
+    function windowResized() {
+        resizeMeadow();
+    }
+    
+    // Attach all p5 global callbacks (works inside IIFE)
+    window.setup = setup;
+    window.draw = draw;
+    window.windowResized = windowResized;
+    window.mousePressed = mousePressed;
+    window.touchStarted = touchStarted;
+    
+    // disable right-click context menu on canvas
+    document.addEventListener('contextmenu', (e) => {
+        if (e.target.tagName === 'CANVAS') e.preventDefault();
+    });
+})();
+</script>
 </body>
 </html>
