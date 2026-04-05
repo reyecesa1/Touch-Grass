@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>touch gra$$ — light & fast meadow</title>
+    <title>touch gra$$ — click to bloom</title>
     <style>
         * {
             margin: 0;
@@ -30,125 +30,92 @@
             z-index: 1;
             pointer-events: auto;
         }
-
-        field {
-            position: relative;
-            z-index: 2;
-            display: block;
-            width: 100%;
-            min-height: 100vh;
-            padding: 2rem 1.5rem;
-            pointer-events: none;
-            font-size: clamp(2rem, 7vw, 4rem);
-            line-height: 1.3;
-            font-weight: normal;
-            letter-spacing: 0.02em;
-            word-break: break-word;
-            text-align: center;
-        }
-
-        /* zero transition lag — instant boldness and color */
-        field span {
-            display: inline-block;
-            transition: none;
-            will-change: font-weight, color;
-            text-shadow: 0 1px 3px rgba(0,0,0,0.2);
-        }
-
-        .hint {
-            position: fixed;
-            bottom: 1rem;
-            left: 0;
-            right: 0;
-            text-align: center;
-            z-index: 3;
-            pointer-events: none;
-            font-family: system-ui, monospace;
-            font-size: 0.75rem;
-            background: rgba(0, 0, 0, 0.55);
-            backdrop-filter: blur(8px);
-            width: fit-content;
-            margin: 0 auto;
-            padding: 0.4rem 1.3rem;
-            border-radius: 60px;
-            color: #ebffd0;
-            font-weight: 500;
-            border: 1px solid rgba(210, 255, 120, 0.7);
-        }
-
-        @media (max-width: 680px) {
-            field { padding: 1.2rem; line-height: 1.35; }
-            .hint { font-size: 0.68rem; bottom: 0.7rem; }
-        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
 </head>
 <body>
-    <field id="grassField"></field>
-    <div class="hint">✨ ultra‑light • hover / touch → letters bloom instantly | spatial culling for zero lag</div>
-
     <script>
         (function(){
-            // ============ LIGHTWEIGHT MEADOW – SPATIAL GRID + DIRECT DOM ============
-            // Optimizations:
-            // 1. Spatial grid (cells of 150px) – only letters near mouse/fingers get full update
-            // 2. Direct HTMLElement styling (no p5 style wrapper overhead)
-            // 3. Reduced letter count to ~260 (still fills screen, but much less paint)
-            // 4. Simple decay for far letters (no distance math, just multiplication)
-            // 5. No setInterval for positions – lazy update on scroll/resize + before interaction
-            // 6. Bloom threshold lowered for faster visual pop
-            // 7. Removed all CSS transitions → instant feedback
-
+            // ============ CLICK‑ONLY BLOOM MEADOW ============
+            // bloom only while mouse/touch is held down → de‑bloom immediately on release
+            
             const BGCOLOR = [23, 195, 50];
-            const TEXT_PHRASE = "touch gra$$ ";      // includes double dollar for bloom
-            const BLOOM_THRESHOLD = 480;              // flowers appear faster
-            const MAX_LETTERS = 260;                  // balanced: full coverage, low overhead
-            const INFLUENCE_RADIUS = 400;              // pixels around pointer that affect letters
-            const GRID_CELL_SIZE = 150;                // spatial partitioning size
-
-            // color maps
-            let baseGreenColor;
-            let flowerColors;
-
-            let allLetters = [];        // each: { el, char, x, y, growth, lastWeight, lastColor }
-            let grassContainer;          // DOM element
-            let gridCells = new Map();    // cellKey -> array of letter indices
-            let lastScrollY = 0;
-            let resizeObserver = null;
-
-            // pointer data (mouse + touches)
-            let activePointers = [];      // array of { x, y }
-
-            // ========== helper: direct DOM style update (no p5 wrapper overhead) ==========
-            function setLetterStyle(letter, weight, colorRgb) {
-                if (letter.lastWeight !== weight) {
-                    letter.el.style.fontWeight = weight;
-                    letter.lastWeight = weight;
-                }
-                if (letter.lastColor !== colorRgb) {
-                    letter.el.style.color = colorRgb;
-                    letter.lastColor = colorRgb;
+            const TEXT_PHRASE = "touch gra$$ ";
+            const BLOOM_THRESHOLD = 480;
+            const INFLUENCE_RADIUS = 400;
+            const GRID_CELL_SIZE = 150;
+            const DECAY_FACTOR = 0.96;
+            const MAX_GROWTH = 1000;
+            const MIN_GROWTH = 1;
+            
+            let letters = [];
+            let gridCells = new Map();
+            let baseGreen;
+            let flowerColors = {};
+            let fontMain;
+            let cols, rows, cellW, cellH;
+            
+            function rebuildSpatialGrid() {
+                gridCells.clear();
+                for (let i = 0; i < letters.length; i++) {
+                    const l = letters[i];
+                    const cellX = Math.floor(l.x / GRID_CELL_SIZE);
+                    const cellY = Math.floor(l.y / GRID_CELL_SIZE);
+                    const key = `${cellX}:${cellY}`;
+                    if (!gridCells.has(key)) gridCells.set(key, []);
+                    gridCells.get(key).push(i);
                 }
             }
-
-            // ========== interpolated color (green → flower) ==========
-            function getBlendColor(letter, growth) {
-                if (growth <= BLOOM_THRESHOLD) return baseGreenColor;
-                let t = (growth - BLOOM_THRESHOLD) / (1000 - BLOOM_THRESHOLD);
+            
+            function generateLetterGrid() {
+                letters = [];
+                textFont(fontMain);
+                textSize(32);
+                const sampleW = textWidth("W");
+                const sampleH = textAscent() + textDescent();
+                
+                const targetLetterWidth = sampleW * 1.2;
+                const targetLetterHeight = sampleH * 1.3;
+                
+                cols = Math.floor(width / targetLetterWidth);
+                rows = Math.floor(height / targetLetterHeight);
+                if (cols < 8) cols = 8;
+                if (rows < 5) rows = 5;
+                
+                cellW = width / cols;
+                cellH = height / rows;
+                
+                let phraseLen = TEXT_PHRASE.length;
+                let idx = 0;
+                for (let row = 0; row < rows; row++) {
+                    for (let col = 0; col < cols; col++) {
+                        const ch = TEXT_PHRASE[idx % phraseLen];
+                        idx++;
+                        const x = col * cellW + cellW * 0.5;
+                        const y = row * cellH + cellH * 0.5;
+                        letters.push({
+                            char: ch === ' ' ? ' ' : ch,
+                            x: x, y: y,
+                            growth: MIN_GROWTH
+                        });
+                    }
+                }
+                rebuildSpatialGrid();
+            }
+            
+            function getBlendedColor(growth, char) {
+                if (growth <= BLOOM_THRESHOLD) return baseGreen;
+                let t = (growth - BLOOM_THRESHOLD) / (MAX_GROWTH - BLOOM_THRESHOLD);
                 t = Math.min(1, Math.max(0, t));
-                const flower = flowerColors[letter.char] || flowerColors['$'] || color(255, 200, 100);
-                // lerpColor returns p5 color object; convert to rgba string once
-                const blended = lerpColor(baseGreenColor, flower, t);
-                return blended.toString();
+                const flower = flowerColors[char] || flowerColors['$'] || color(255, 200, 100);
+                return lerpColor(baseGreen, flower, t);
             }
-
-            // ========== update single letter (full distance check) ==========
-            function updateLetterNearPointer(letter, pointers) {
-                // fast decay for all letters (will be applied regardless)
-                let newGrowth = letter.growth * 0.96;
+            
+            // update a letter near active pointers (click/touch hold)
+            function updateLetterWithClick(letter, pointers) {
+                let newGrowth = letter.growth * DECAY_FACTOR;
                 let maxBoost = 0;
-
-                // find closest pointer
+                
                 for (let p of pointers) {
                     const dx = p.x - letter.x;
                     const dy = p.y - letter.y;
@@ -159,63 +126,25 @@
                         if (intensity > maxBoost) maxBoost = intensity;
                     }
                 }
-
+                
                 if (maxBoost > 0) {
-                    newGrowth = Math.min(newGrowth + maxBoost, 1000);
+                    newGrowth = Math.min(newGrowth + maxBoost, MAX_GROWTH);
                 }
-                newGrowth = Math.max(newGrowth, 1);
+                newGrowth = Math.max(newGrowth, MIN_GROWTH);
                 letter.growth = newGrowth;
-
-                // apply style only if changed
-                const weight = Math.round(newGrowth);
-                const colorStr = getBlendColor(letter, newGrowth);
-                setLetterStyle(letter, weight, colorStr);
             }
-
-            // ========== update far letters (just decay, no distance calc) ==========
+            
             function updateLetterFar(letter) {
-                let newGrowth = letter.growth * 0.96;
-                if (newGrowth < 1) newGrowth = 1;
-                if (Math.abs(newGrowth - letter.growth) < 0.5 && letter.growth <= 1.2) {
-                    // already minimal and barely changing – skip style update to save work
-                    letter.growth = newGrowth;
-                    return;
-                }
+                let newGrowth = letter.growth * DECAY_FACTOR;
+                if (newGrowth < MIN_GROWTH) newGrowth = MIN_GROWTH;
                 letter.growth = newGrowth;
-                const weight = Math.round(newGrowth);
-                const colorStr = getBlendColor(letter, newGrowth);
-                setLetterStyle(letter, weight, colorStr);
             }
-
-            // ========== rebuild spatial grid after position updates ==========
-            function rebuildSpatialGrid() {
-                gridCells.clear();
-                for (let i = 0; i < allLetters.length; i++) {
-                    const l = allLetters[i];
-                    const cellX = Math.floor(l.x / GRID_CELL_SIZE);
-                    const cellY = Math.floor(l.y / GRID_CELL_SIZE);
-                    const key = `${cellX}:${cellY}`;
-                    if (!gridCells.has(key)) gridCells.set(key, []);
-                    gridCells.get(key).push(i);
-                }
-            }
-
-            // ========== refresh all letter positions from DOM (called on scroll/resize) ==========
-            function refreshAllPositions() {
-                for (let letter of allLetters) {
-                    const rect = letter.el.getBoundingClientRect();
-                    letter.x = (rect.left + rect.right) / 2;
-                    letter.y = (rect.top + rect.bottom) / 2;
-                }
-                rebuildSpatialGrid();
-            }
-
-            // ========== collect cells within influence radius for each pointer ==========
-            function getAffectedLetterIndices(pointers) {
+            
+            function getAffectedIndices(pointers) {
                 if (pointers.length === 0) return null;
                 const affectedSet = new Set();
                 const radiusCells = Math.ceil(INFLUENCE_RADIUS / GRID_CELL_SIZE) + 1;
-
+                
                 for (let p of pointers) {
                     const centerCellX = Math.floor(p.x / GRID_CELL_SIZE);
                     const centerCellY = Math.floor(p.y / GRID_CELL_SIZE);
@@ -231,165 +160,113 @@
                 }
                 return affectedSet;
             }
-
-            // ========== main update loop (called from p5 draw) ==========
-            function updateMeadow() {
-                if (allLetters.length === 0) return;
-
-                // gather active pointers (mouse + touches)
+            
+            function updateAllGrowths() {
+                // active pointers ONLY when mouse/touch is held down (no hover)
                 const pointers = [];
-                // mouse (always present if inside window, but avoid when no movement? we include anyway)
-                if (mouseX >= 0 && mouseX <= width && mouseY >= 0 && mouseY <= height) {
+                
+                // mouse: only if button is pressed
+                if (mouseIsPressed && mouseX >= 0 && mouseX <= width && mouseY >= 0 && mouseY <= height) {
                     pointers.push({ x: mouseX, y: mouseY });
                 }
-                // touches
+                // touches: automatically only present while touching
                 if (touches.length > 0) {
                     for (let t of touches) {
                         pointers.push({ x: t.x, y: t.y });
                     }
                 }
-
+                
                 if (pointers.length === 0) {
-                    // no interaction: just decay all letters with cheap path
-                    for (let letter of allLetters) {
-                        let ng = letter.growth * 0.96;
-                        if (ng < 1) ng = 1;
-                        if (ng !== letter.growth) {
-                            letter.growth = ng;
-                            const weight = Math.round(ng);
-                            const colorStr = getBlendColor(letter, ng);
-                            setLetterStyle(letter, weight, colorStr);
-                        }
+                    // no active click/touch → decay all letters
+                    for (let i = 0; i < letters.length; i++) {
+                        let ng = letters[i].growth * DECAY_FACTOR;
+                        if (ng < MIN_GROWTH) ng = MIN_GROWTH;
+                        letters[i].growth = ng;
                     }
                     return;
                 }
-
-                // spatial optimization: get indices of letters near any pointer
-                const nearIndices = getAffectedLetterIndices(pointers);
+                
+                const nearIndices = getAffectedIndices(pointers);
                 if (nearIndices && nearIndices.size > 0) {
-                    // update near letters with full distance checks
                     for (let idx of nearIndices) {
-                        updateLetterNearPointer(allLetters[idx], pointers);
+                        updateLetterWithClick(letters[idx], pointers);
                     }
-                    // update far letters (simple decay)
-                    for (let i = 0; i < allLetters.length; i++) {
+                    for (let i = 0; i < letters.length; i++) {
                         if (!nearIndices.has(i)) {
-                            updateLetterFar(allLetters[i]);
+                            updateLetterFar(letters[i]);
                         }
                     }
                 } else {
-                    // fallback: no cells found but pointers exist (rare), update all with distance
-                    for (let letter of allLetters) {
-                        updateLetterNearPointer(letter, pointers);
+                    for (let i = 0; i < letters.length; i++) {
+                        updateLetterWithClick(letters[i], pointers);
                     }
                 }
             }
-
-            // ========== generate grass letters (lean DOM, no extra p5 wrappers) ==========
-            function buildGrassField() {
-                const container = document.getElementById('grassField');
-                if (!container) return;
-                container.innerHTML = '';
-                allLetters = [];
+            
+            function drawLetters() {
+                textFont(fontMain);
+                textAlign(CENTER, CENTER);
                 
-                let added = 0;
-                // repeat phrase until we reach MAX_LETTERS or fill viewport height + 200px
-                for (let row = 0; row < 40 && added < MAX_LETTERS; row++) {
-                    for (let i = 0; i < TEXT_PHRASE.length; i++) {
-                        if (added >= MAX_LETTERS) break;
-                        const ch = TEXT_PHRASE[i];
-                        const span = document.createElement('span');
-                        span.textContent = ch === ' ' ? '\u00A0' : ch;
-                        span.style.display = 'inline-block';
-                        container.appendChild(span);
-                        
-                        // store raw element and initial props
-                        allLetters.push({
-                            el: span,
-                            char: ch,
-                            x: 0, y: 0,
-                            growth: 1,
-                            lastWeight: 1,
-                            lastColor: ''
-                        });
-                        added++;
-                    }
-                    // early stop if content exceeds viewport + 300px
-                    const rect = container.getBoundingClientRect();
-                    if (rect.bottom > window.innerHeight + 300) break;
-                }
-                
-                // initial positions
-                setTimeout(() => {
-                    refreshAllPositions();
-                }, 20);
-            }
-
-            // ========== event listeners: update positions on scroll/resize ==========
-            function bindPositionUpdates() {
-                window.addEventListener('scroll', () => {
-                    requestAnimationFrame(() => {
-                        refreshAllPositions();
-                    });
-                });
-                window.addEventListener('resize', () => {
-                    setTimeout(() => {
-                        refreshAllPositions();
-                        // also resize canvas if needed (p5 handles canvas resize separately)
-                    }, 60);
-                });
-                // detect font load reflow
-                if (document.fonts && document.fonts.ready) {
-                    document.fonts.ready.then(() => refreshAllPositions());
-                }
-                // observe container size changes (e.g., orientation)
-                const container = document.getElementById('grassField');
-                if (container && window.ResizeObserver) {
-                    const ro = new ResizeObserver(() => refreshAllPositions());
-                    ro.observe(container);
+                for (let letter of letters) {
+                    const growth = letter.growth;
+                    let scaleFactor = map(growth, MIN_GROWTH, MAX_GROWTH, 0.75, 1.35);
+                    const col = getBlendedColor(growth, letter.char);
+                    fill(col);
+                    noStroke();
+                    
+                    push();
+                    translate(letter.x, letter.y);
+                    scale(scaleFactor);
+                    textSize(32);
+                    text(letter.char, 0, 0);
+                    pop();
                 }
             }
-
-            // ========== p5.js setup ==========
+            
+            function resizeMeadow() {
+                resizeCanvas(windowWidth, windowHeight);
+                background(BGCOLOR[0], BGCOLOR[1], BGCOLOR[2]);
+                generateLetterGrid();
+            }
+            
+            // ========== p5.js core ==========
             function setup() {
                 const canvas = createCanvas(windowWidth, windowHeight);
                 canvas.style('position', 'fixed').style('top', '0').style('left', '0').style('z-index', '1');
+                pixelDensity(1);
                 
-                // init colors
-                baseGreenColor = color(41, 157, 0);
+                fontMain = 'monospace';
+                textFont(fontMain);
+                
+                baseGreen = color(41, 157, 0);
                 flowerColors = {
-                    t: color(119, 239, 255),
-                    o: color(255, 187, 194),
-                    u: color(255, 170, 40),
-                    c: color(242, 18, 0),
-                    h: color(221, 255, 123),
-                    g: color(255, 255, 220),
-                    r: color(255, 229, 0),
-                    a: color(138, 97, 255),
-                    $: color(255, 110, 30),
-                    s: color(227, 192, 255)
+                    't': color(119, 239, 255),
+                    'o': color(255, 187, 194),
+                    'u': color(255, 170, 40),
+                    'c': color(242, 18, 0),
+                    'h': color(221, 255, 123),
+                    'g': color(255, 255, 220),
+                    'r': color(255, 229, 0),
+                    'a': color(138, 97, 255),
+                    '$': color(255, 110, 30),
+                    's': color(227, 192, 255),
+                    ' ': color(180, 230, 120)
                 };
                 
-                buildGrassField();
-                bindPositionUpdates();
+                generateLetterGrid();
                 frameRate(60);
             }
-
+            
             function draw() {
                 background(BGCOLOR[0], BGCOLOR[1], BGCOLOR[2]);
-                updateMeadow();
+                updateAllGrowths();
+                drawLetters();
             }
-
+            
             function windowResized() {
-                resizeCanvas(windowWidth, windowHeight);
-                background(BGCOLOR[0], BGCOLOR[1], BGCOLOR[2]);
-                // rebuild field to adapt to new width? but simpler: just reposition existing letters
-                refreshAllPositions();
-                // also reflow text if needed (text wrapping may change letter positions)
-                setTimeout(() => refreshAllPositions(), 30);
+                resizeMeadow();
             }
-
-            // expose p5 hooks
+            
             window.setup = setup;
             window.draw = draw;
             window.windowResized = windowResized;
